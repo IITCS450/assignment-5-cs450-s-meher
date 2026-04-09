@@ -4,50 +4,86 @@
 #include "uthread.h"
 #include "umutex.h"
 
-#define N 8
-static int buf[N], head, tail, count;
+#define NBUFSLOTS 8
+#define NITEMS 200
+
+static int buf[NBUFSLOTS];
+static int head = 0;
+static int tail = 0;
+static int count = 0;
 static umutex_t mu;
 
-static void producer(void *arg){
+static void
+producer(void *arg)
+{
   int id = (int)arg;
-  for(int i=0;i<100;i++){
-    mutex_lock(&mu);
-    if(count < N){
-      buf[tail] = id*1000 + i;
-      tail = (tail+1)%N;
-      count++;
+  int i;
+
+  for(i = 0; i < NITEMS; i++){
+    for(;;){
+      mutex_lock(&mu);
+      if(count < NBUFSLOTS){
+        buf[tail] = id * 100000 + i;
+        tail = (tail + 1) % NBUFSLOTS;
+        count++;
+        mutex_unlock(&mu);
+        break;
+      }
+      mutex_unlock(&mu);
+      thread_yield();
     }
-    mutex_unlock(&mu);
-    thread_yield();
   }
 }
 
-static void consumer(void *arg){
+static void
+consumer(void *arg)
+{
+  int item;
+  int got;
+
   (void)arg;
-  int got = 0;
-  while(got < 200){
-    mutex_lock(&mu);
-    if(count > 0){
-      int x = buf[head];
-      head = (head+1)%N;
-      count--;
-      got++;
-      if(got % 50 == 0) printf(1, "consumer got %d (last=%d)\n", got, x);
+  got = 0;
+
+  while(got < 2 * NITEMS){
+    for(;;){
+      mutex_lock(&mu);
+      if(count > 0){
+        item = buf[head];
+        head = (head + 1) % NBUFSLOTS;
+        count--;
+        mutex_unlock(&mu);
+        got++;
+        if((got % 100) == 0)
+          printf(1, "consumer got %d items (last=%d)\n", got, item);
+        break;
+      }
+      mutex_unlock(&mu);
+      thread_yield();
     }
-    mutex_unlock(&mu);
-    thread_yield();
   }
 }
 
-int main(void){
+int
+main(void)
+{
+  tid_t p1, p2, c1;
+
   thread_init();
   mutex_init(&mu);
 
-  tid_t p1 = thread_create(producer, (void*)1);
-  tid_t p2 = thread_create(producer, (void*)2);
-  tid_t c1 = thread_create(consumer, 0);
-  (void)p1; (void)p2; (void)c1;
+  p1 = thread_create(producer, (void*)1);
+  p2 = thread_create(producer, (void*)2);
+  c1 = thread_create(consumer, 0);
 
-  printf(1, "test_pc: done (skeleton)\n");
+  if(p1 < 0 || p2 < 0 || c1 < 0){
+    printf(1, "thread_create failed\n");
+    exit();
+  }
+
+  thread_join(p1);
+  thread_join(p2);
+  thread_join(c1);
+
+  printf(1, "test_pc: done\n");
   exit();
 }
